@@ -1,0 +1,45 @@
+# Xcode generated files
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/
+
+# Swift Package Manager
+.build/
+Packages/
+Package.resolved
+DerivedData/
+
+# CocoaPods
+Pods/
+*.xcworkspace/
+!Pods/.gitignore
+
+# Carthage
+Carthage/Build/
+
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/
+
+# Build products
+build/
+*.app
+*.dSYM
+*.ipa
+
+# Temporary files
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+
+# Dependency managers (if used)
+# e.g., if you use Mint:
+# .mint/
