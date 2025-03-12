@@ -154,6 +154,44 @@ extension Task {
         default: return .blue
         }
     }
+    
+    // Format the time for display
+    var formattedTime: String? {
+        guard let dueTime = dueTime else { return nil }
+        
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        
+        return formatter.string(from: dueTime)
+    }
+    
+    // Check if the task is due today
+    var isDueToday: Bool {
+        guard let dueDate = dueDate else { return false }
+        return Calendar.current.isDateInToday(dueDate)
+    }
+    
+    // Check if the task is overdue
+    var isOverdue: Bool {
+        guard let dueDate = dueDate, !completed else { return false }
+        
+        if hasTimeReminder, let dueTime = dueTime {
+            // If time is set, combine date and time for comparison
+            let calendar = Calendar.current
+            let timeComponents = calendar.dateComponents([.hour, .minute], from: dueTime)
+            
+            if let combinedDate = calendar.date(bySettingHour: timeComponents.hour ?? 0,
+                                              minute: timeComponents.minute ?? 0,
+                                              second: 0,
+                                              of: dueDate) {
+                return combinedDate < Date()
+            }
+        }
+        
+        // If no time is set, just check if the date is in the past
+        return dueDate < Calendar.current.startOfDay(for: Date())
+    }
 }
 
 // MARK: - Streak Calculation
@@ -959,8 +997,8 @@ struct InputAccessoryDisabler: UIViewRepresentable {
 }
 
 // MARK: - Notification Center Management
-class NotificationManager {
-    static let shared = NotificationManager()
+class NotificationObserverManager {
+    static let shared = NotificationObserverManager()
     private var observers = [NSObjectProtocol]()
     
     func addObserver(for name: Notification.Name, object: Any? = nil, queue: OperationQueue? = .main, using block: @escaping (Notification) -> Void) -> NSObjectProtocol {

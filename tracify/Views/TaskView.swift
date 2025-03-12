@@ -40,7 +40,7 @@ struct TaskView: View {
                 
                 // Content
                 VStack(spacing: 0) {
-                    if tasks.isEmpty {
+                    if filteredTasks.isEmpty {
                         emptyStateView
                     } else {
                         // Custom Search Bar
@@ -72,6 +72,17 @@ struct TaskView: View {
                                     taskGroup(tasks: upcomingTasks)
                                 } else {
                                     noTasksMessage(message: "No upcoming tasks")
+                                }
+                                
+                                // Tasks without due date
+                                sectionHeader(title: "No Due Date", icon: "infinity", count: tasksWithoutDueDate.count)
+                                    .padding(.horizontal, 20)
+                                    .padding(.top, 10)
+                                
+                                if !tasksWithoutDueDate.isEmpty {
+                                    taskGroup(tasks: tasksWithoutDueDate)
+                                } else {
+                                    noTasksMessage(message: "No tasks without due date")
                                 }
                                 
                                 // Completed Tasks Header (if any)
@@ -142,6 +153,9 @@ struct TaskView: View {
             
             TextField("Search tasks...", text: $searchText)
                 .padding(10)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .disableInputAccessoryView()
             
             if !searchText.isEmpty {
                 Button(action: {
@@ -169,6 +183,8 @@ struct TaskView: View {
             
             Text(title)
                 .font(.system(size: 18, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
             
             Spacer()
             
@@ -186,12 +202,14 @@ struct TaskView: View {
         Text(message)
             .font(.system(size: 16))
             .foregroundColor(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding()
     }
     
     private func taskGroup(tasks: [Task]) -> some View {
-        VStack(spacing: 12) {
+        LazyVStack(spacing: 12) {
             ForEach(tasks, id: \.id) { task in
                 TaskRow(task: task)
                     .contextMenu {
@@ -233,11 +251,15 @@ struct TaskView: View {
             Text("No Tasks Yet")
                 .font(.system(size: 24, weight: .bold))
                 .foregroundColor(colorScheme == .dark ? .white : Color(hex: "2D3142"))
+                .lineLimit(1)
+                .truncationMode(.tail)
             
             Text("Start adding tasks to track your progress and stay organized.")
                 .font(.system(size: 16))
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .truncationMode(.tail)
                 .padding(.horizontal, 40)
             
             // Button
@@ -249,6 +271,8 @@ struct TaskView: View {
                         .font(.system(size: 18))
                     Text("Create New Task")
                         .font(.system(size: 16, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
                 .frame(height: 50)
                 .frame(minWidth: 200)
@@ -306,11 +330,41 @@ struct TaskView: View {
         }
     }
     
+    private var tasksWithoutDueDate: [Task] {
+        pendingTasks.filter { task in
+            return task.dueDate == nil
+        }
+    }
+    
     // MARK: - Actions
     
     private func toggleTaskCompletion(_ task: Task) {
         withAnimation {
             task.completed.toggle()
+            
+            do {
+                try viewContext.save()
+                
+                // If task is completed, cancel its notifications
+                if task.completed {
+                    NotificationManager.shared.cancelTaskNotifications(for: task)
+                } else if task.hasTimeReminder && task.dueDate != nil && task.dueTime != nil {
+                    // If task is marked as incomplete and has a time reminder, reschedule notification
+                    NotificationManager.shared.scheduleTaskNotification(for: task)
+                }
+            } catch {
+                let nsError = error as NSError
+                print("Error toggling completion: \(nsError), \(nsError.userInfo)")
+            }
+        }
+    }
+    
+    private func deleteTask(_ task: Task) {
+        withAnimation {
+            // Cancel any notifications for this task before deleting
+            NotificationManager.shared.cancelTaskNotifications(for: task)
+            
+            viewContext.delete(task)
             do {
                 try viewContext.save()
             } catch {
@@ -320,16 +374,11 @@ struct TaskView: View {
         }
     }
     
-    private func deleteTask(_ task: Task) {
-        withAnimation {
-            viewContext.delete(task)
-            do {
-                try viewContext.save()
-            } catch {
-                let nsError = error as NSError
-                print("Unresolved error \(nsError), \(nsError.userInfo)")
-            }
-        }
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
     }
 }
 
@@ -458,56 +507,95 @@ struct TaskRow: View {
                         .foregroundColor(task.completed ? .secondary : (colorScheme == .dark ? .white : .black))
                         .strikethrough(task.completed)
                         .lineLimit(1)
+                        .truncationMode(.tail)
                     
                     if let details = task.details, !details.isEmpty {
                         Text(details)
                             .font(.system(size: 14))
                             .foregroundColor(.secondary)
                             .lineLimit(1)
+                            .truncationMode(.tail)
                             .opacity(task.completed ? 0.7 : 1.0)
                     }
                     
                     // Metadata row
-                    HStack(spacing: 12) {
-                        if let dueDate = task.dueDate {
-                            // Tappable date tag
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            if let dueDate = task.dueDate {
+                                // Tappable date tag
+                                Button(action: {
+                                    editingDate = dueDate
+                                    isShowingDatePicker = true
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "calendar")
+                                            .font(.system(size: 12))
+                                        Text(dueDate.formattedDate())
+                                            .font(.system(size: 12))
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                    }
+                                    .foregroundColor(getDueDateColor(dueDate))
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(getDueDateColor(dueDate).opacity(0.1))
+                                    .cornerRadius(6)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                                .fixedSize(horizontal: true, vertical: false)
+                                
+                                // Time deadline tag (if enabled)
+                                if task.hasTimeReminder, let dueTime = task.dueTime {
+                                    let timeString = formatTime(dueTime)
+                                    
+                                    Button(action: {}) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "clock")
+                                                .font(.system(size: 12))
+                                            
+                                            Text(timeString)
+                                                .font(.system(size: 12))
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+                                            
+                                            // Small notification bell icon
+                                            Image(systemName: "bell.fill")
+                                                .font(.system(size: 10))
+                                                .padding(.leading, 2)
+                                        }
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.gray.opacity(0.2))
+                                        .cornerRadius(8)
+                                    }
+                                    .buttonStyle(BorderlessButtonStyle())
+                                    .fixedSize(horizontal: true, vertical: false)
+                                }
+                            }
+                            
+                            // Tappable priority tag
                             Button(action: {
-                                editingDate = dueDate
-                                isShowingDatePicker = true
+                                isShowingPriorityPicker = true
                             }) {
                                 HStack(spacing: 4) {
-                                    Image(systemName: "calendar")
+                                    Image(systemName: "flag.fill")
                                         .font(.system(size: 12))
-                                    Text(dueDate.formattedDate())
+                                    Text(task.priorityName)
                                         .font(.system(size: 12))
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
                                 }
-                                .foregroundColor(getDueDateColor(dueDate))
+                                .foregroundColor(task.priorityColor)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 4)
-                                .background(getDueDateColor(dueDate).opacity(0.1))
+                                .background(task.priorityColor.opacity(0.1))
                                 .cornerRadius(6)
                             }
                             .buttonStyle(BorderlessButtonStyle())
+                            .fixedSize(horizontal: true, vertical: false)
                         }
-                        
-                        // Tappable priority tag
-                        Button(action: {
-                            isShowingPriorityPicker = true
-                        }) {
-                            HStack(spacing: 4) {
-                                Image(systemName: "flag.fill")
-                                    .font(.system(size: 12))
-                                Text(task.priorityName)
-                                    .font(.system(size: 12))
-                            }
-                            .foregroundColor(task.priorityColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(task.priorityColor.opacity(0.1))
-                            .cornerRadius(6)
-                        }
-                        .buttonStyle(BorderlessButtonStyle())
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 
                 Spacer()
@@ -528,6 +616,7 @@ struct TaskRow: View {
             .padding(.vertical, 16)
             .padding(.horizontal, 20)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, 4)
         .padding(.vertical, 4)
         .scaleEffect(isPressed ? 0.98 : 1.0)
@@ -553,6 +642,14 @@ struct TaskRow: View {
             
             do {
                 try viewContext.save()
+                
+                // If task is completed, cancel its notifications
+                if task.completed {
+                    NotificationManager.shared.cancelTaskNotifications(for: task)
+                } else if task.hasTimeReminder && task.dueDate != nil && task.dueTime != nil {
+                    // If task is marked as incomplete and has a time reminder, reschedule notification
+                    NotificationManager.shared.scheduleTaskNotification(for: task)
+                }
             } catch {
                 let nsError = error as NSError
                 print("Error toggling completion: \(nsError), \(nsError.userInfo)")
@@ -581,6 +678,13 @@ struct TaskRow: View {
             print("Error updating priority: \(nsError), \(nsError.userInfo)")
         }
     }
+    
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
+    }
 }
 
 // Edit Task View - Uses the same form as NewTaskView but prefills with existing data
@@ -594,8 +698,11 @@ struct EditTaskView: View {
     @State private var title: String
     @State private var details: String
     @State private var dueDate: Date
+    @State private var dueTime: Date
     @State private var priority: Int16
     @State private var isShowingDatePicker: Bool
+    @State private var isShowingTimePicker: Bool
+    @State private var hasTimeReminder: Bool
     @State private var selectedColor: String // Default color
     
     init(task: Task) {
@@ -604,221 +711,37 @@ struct EditTaskView: View {
         _title = State(initialValue: task.title ?? "")
         _details = State(initialValue: task.details ?? "")
         _dueDate = State(initialValue: task.dueDate ?? Date())
+        _dueTime = State(initialValue: task.dueTime ?? Date())
         _priority = State(initialValue: task.priority)
         _isShowingDatePicker = State(initialValue: task.dueDate != nil)
+        _isShowingTimePicker = State(initialValue: task.hasTimeReminder)
+        _hasTimeReminder = State(initialValue: task.hasTimeReminder)
         _selectedColor = State(initialValue: "5E6BE8") // Default color
     }
     
-    var body: some View {
-        ZStack {
-            // Background gradient
-            LinearGradient(
-                gradient: Gradient(colors: [
-                    colorScheme == .dark ? Color(hex: "1A1A1A") : Color(hex: "F8F9FF"),
-                    colorScheme == .dark ? Color(hex: "212121") : Color(hex: "FFFFFF")
-                ]),
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
-            
-            // Content
-            ScrollView {
-                VStack(spacing: 24) {
-                    // Task title input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("TITLE")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.secondary)
-                        
-                        TextField("Task title", text: $title)
-                            .font(.system(size: 17))
-                            .padding()
-                            .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
-                            .cornerRadius(12)
-                            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                    }
-                    
-                    // Task details input
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("DETAILS")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.secondary)
-                        
-                        ZStack(alignment: .topLeading) {
-                            if details.isEmpty {
-                                Text("Add task details (optional)")
-                                    .foregroundColor(Color.gray.opacity(0.7))
-                                    .font(.system(size: 17))
-                                    .padding(.top, 18)
-                                    .padding(.leading, 16)
-                            }
-                            
-                            TextEditor(text: $details)
-                                .font(.system(size: 17))
-                                .padding(4)
-                                .frame(minHeight: 120)
-                                .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
-                                .cornerRadius(12)
-                                .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                        }
-                    }
-                    
-                    // Due date section
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Text("DUE DATE")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.secondary)
-                            
-                            Spacer()
-                            
-                            Toggle("", isOn: $isShowingDatePicker)
-                                .labelsHidden()
-                                .tint(Color(hex: selectedColor))
-                        }
-                        
-                        if isShowingDatePicker {
-                            HStack {
-                                Image(systemName: "calendar")
-                                    .foregroundColor(Color(hex: selectedColor))
-                                
-                                DatePicker("Select date", selection: $dueDate, displayedComponents: [.date])
-                                    .labelsHidden()
-                                    .datePickerStyle(.compact)
-                                
-                                Spacer()
-                                
-                                Text(dueDate.formattedDate())
-                                    .font(.system(size: 15))
-                                    .foregroundColor(.secondary)
-                            }
-                            .padding()
-                            .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
-                            .cornerRadius(12)
-                            .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
-                        }
-                    }
-                    
-                    // Priority section
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("PRIORITY")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.secondary)
-                        
-                        HStack(spacing: 12) {
-                            priorityButton(level: 0, label: "Low")
-                            priorityButton(level: 1, label: "Medium")
-                            priorityButton(level: 2, label: "High")
-                        }
-                    }
-                    
-                    Spacer(minLength: 40)
-                    
-                    // Save button
-                    Button(action: {
-                        updateTask()
-                    }) {
-                        Text("Save Changes")
-                            .font(.system(size: 17, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(height: 54)
-                            .frame(maxWidth: .infinity)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(title.isEmpty ? Color.gray.opacity(0.5) : Color(hex: selectedColor))
-                                    .shadow(color: title.isEmpty ? Color.clear : Color(hex: selectedColor).opacity(0.4), 
-                                            radius: 8, x: 0, y: 4)
-                            )
-                    }
-                    .disabled(title.isEmpty)
-                    .padding(.bottom, 30)
-                }
-                .padding(24)
-            }
-        }
-        .navigationTitle("Edit Task")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button("Cancel") {
-                    dismiss()
-                }
-                .foregroundColor(Color(hex: selectedColor))
-            }
-        }
+    // Computed properties for backgrounds (extracted from inline lets)
+    private var textFieldBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
     }
     
-    private func priorityButton(level: Int16, label: String) -> some View {
-        Button(action: {
-            priority = level
-        }) {
-            Text(label)
-                .font(.system(size: 15, weight: priority == level ? .semibold : .regular))
-                .foregroundColor(priority == level ? .white : (colorScheme == .dark ? .white : Color(hex: "2D3142")))
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(priority == level ? Color(hex: selectedColor) : 
-                              (colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white.opacity(0.8)))
-                        .shadow(color: priority == level ? Color(hex: selectedColor).opacity(0.3) : Color.black.opacity(0.03), 
-                                radius: 5, x: 0, y: 2)
-                )
-        }
+    private var textEditorBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
     }
     
-    private func updateTask() {
-        task.title = title
-        task.details = details
-        task.dueDate = isShowingDatePicker ? dueDate : nil
-        task.priority = priority
-        
-        do {
-            try viewContext.save()
-            dismiss()
-        } catch {
-            let nsError = error as NSError
-            print("Error updating task: \(nsError), \(nsError.userInfo)")
-        }
+    private var datePickerBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
     }
-}
-
-struct NewTaskView: View {
-    @Environment(\.managedObjectContext) private var viewContext
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.colorScheme) private var colorScheme
     
-    @State private var title = ""
-    @State private var details = ""
-    @State private var dueDate = Date()
-    @State private var priority: Int16 = 0
-    @State private var isShowingDatePicker = false
-    @State private var selectedColor = "5E6BE8" // Default color
-    
-    // Color options for tasks
-    private let colorOptions = [
-        "5E6BE8", // Primary blue
-        "FF9D42", // Orange
-        "4CD964", // Green
-        "FF3B30", // Red
-        "AF52DE", // Purple
-        "FF2D55"  // Pink
-    ]
+    private var timePickerBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
+    }
     
     var body: some View {
         NavigationView {
             ZStack {
-                // Background gradient
-                LinearGradient(
-                    gradient: Gradient(colors: [
-                        colorScheme == .dark ? Color(hex: "1A1A1A") : Color(hex: "F8F9FF"),
-                        colorScheme == .dark ? Color(hex: "212121") : Color(hex: "FFFFFF")
-                    ]),
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+                // Background color
+                createBackgroundGradient()
+                    .ignoresSafeArea()
                 
                 // Content
                 ScrollView {
@@ -832,7 +755,7 @@ struct NewTaskView: View {
                             TextField("Task title", text: $title)
                                 .font(.system(size: 17))
                                 .padding()
-                                .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
+                                .background(textFieldBackground)
                                 .cornerRadius(12)
                                 .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
                         }
@@ -856,7 +779,7 @@ struct NewTaskView: View {
                                     .font(.system(size: 17))
                                     .padding(4)
                                     .frame(minHeight: 120)
-                                    .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
+                                    .background(textEditorBackground)
                                     .cornerRadius(12)
                                     .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
                             }
@@ -892,9 +815,65 @@ struct NewTaskView: View {
                                         .foregroundColor(.secondary)
                                 }
                                 .padding()
-                                .background(colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white)
+                                .background(datePickerBackground)
                                 .cornerRadius(12)
                                 .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                            }
+                        }
+                        
+                        // Due time section
+                        if isShowingDatePicker {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    Text("DUE TIME")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    
+                                    Spacer()
+                                    
+                                    Toggle("", isOn: $hasTimeReminder)
+                                        .labelsHidden()
+                                        .tint(Color(hex: selectedColor))
+                                        .onChange(of: hasTimeReminder) { _, newValue in
+                                            isShowingTimePicker = newValue
+                                        }
+                                }
+                                
+                                if isShowingTimePicker {
+                                    HStack {
+                                        Image(systemName: "clock")
+                                            .foregroundColor(Color(hex: selectedColor))
+                                        
+                                        DatePicker("Select time", selection: $dueTime, displayedComponents: [.hourAndMinute])
+                                            .labelsHidden()
+                                            .datePickerStyle(.compact)
+                                        
+                                        Spacer()
+                                        
+                                        Text(formattedTime(dueTime))
+                                            .font(.system(size: 15))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding()
+                                    .background(timePickerBackground)
+                                    .cornerRadius(12)
+                                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                                    
+                                    // Notification reminder info
+                                    HStack {
+                                        Image(systemName: "bell.fill")
+                                            .foregroundColor(Color(hex: selectedColor))
+                                            .font(.system(size: 14))
+                                        
+                                        Text("You'll receive a notification at this time")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.secondary)
+                                        
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, 4)
+                                }
                             }
                         }
                         
@@ -919,22 +898,372 @@ struct NewTaskView: View {
                             
                             HStack(spacing: 16) {
                                 ForEach(colorOptions, id: \.self) { color in
-                                    Circle()
-                                        .fill(Color(hex: color))
-                                        .frame(width: 30, height: 30)
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color.white, lineWidth: selectedColor == color ? 2 : 0)
-                                                .padding(2)
-                                        )
-                                        .overlay(
-                                            Circle()
-                                                .stroke(Color(hex: color).opacity(0.3), lineWidth: 1)
-                                        )
-                                        .shadow(color: Color(hex: color).opacity(0.5), radius: 3, x: 0, y: 0)
-                                        .onTapGesture {
-                                            selectedColor = color
+                                    colorCircleButton(color: color, isSelected: selectedColor == color) {
+                                        selectedColor = color
+                                    }
+                                }
+                            }
+                            .padding(.horizontal)
+                        }
+                        
+                        Spacer()
+                    }
+                    .padding(24)
+                }
+                .navigationTitle("Edit Task")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Cancel") { dismiss() }
+                            .foregroundColor(Color(hex: selectedColor))
+                    }
+                    
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Save") { updateTask() }
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(Color(hex: selectedColor))
+                            .disabled(title.isEmpty)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+    
+    private func formattedTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
+    }
+    
+    // Helper function for color circle buttons
+    private func colorCircleButton(color: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        let circleColor = Color(hex: color)
+        let strokeWidth: CGFloat = isSelected ? 2 : 0
+        
+        return Circle()
+            .fill(circleColor)
+            .frame(width: 30, height: 30)
+            .overlay(
+                Circle()
+                    .stroke(Color.white, lineWidth: strokeWidth)
+                    .padding(2)
+            )
+            .overlay(
+                Circle()
+                    .stroke(circleColor.opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: circleColor.opacity(0.5), radius: 3, x: 0, y: 0)
+            .onTapGesture(perform: action)
+    }
+    
+    // Color options for tasks
+    private let colorOptions = [
+        "5E6BE8", // Primary blue
+        "FF9D42", // Orange
+        "4CD964", // Green
+        "FF3B30", // Red
+        "AF52DE", // Purple
+        "FF2D55"  // Pink
+    ]
+    
+    private func priorityButton(level: Int16, label: String) -> some View {
+        // Extract background and text colors to simplify expressions
+        let isSelected = priority == level
+        let backgroundColor = isSelected ? 
+            Color(hex: selectedColor).opacity(0.15) : 
+            (colorScheme == .dark ? Color(hex: "2A2A2A") : Color(hex: "F5F5F5"))
+        
+        let textColor = isSelected ? 
+            Color(hex: selectedColor) : 
+            (colorScheme == .dark ? Color.gray : Color(hex: "8E8E93"))
+        
+        let fontWeight: Font.Weight = isSelected ? .semibold : .regular
+        
+        // Create the text view separately
+        let textView = Text(label)
+            .font(.system(size: 15, weight: fontWeight))
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+        
+        // Create the background separately
+        let background = RoundedRectangle(cornerRadius: 8)
+            .fill(backgroundColor)
+        
+        // Combine them in the button
+        return Button(action: {
+            priority = level
+        }) {
+            textView
+                .background(background)
+                .foregroundColor(textColor)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    private func updateTask() {
+        task.title = title
+        task.details = details
+        task.priority = priority
+        
+        // Update due date if enabled
+        if isShowingDatePicker {
+            task.dueDate = dueDate
+            
+            // Update due time if enabled
+            if hasTimeReminder {
+                task.dueTime = dueTime
+                task.hasTimeReminder = true
+            } else {
+                task.dueTime = nil
+                task.hasTimeReminder = false
+            }
+        } else {
+            task.dueDate = nil
+            task.dueTime = nil
+            task.hasTimeReminder = false
+        }
+        
+        do {
+            try viewContext.save()
+            
+            // Update notification
+            if isShowingDatePicker && hasTimeReminder {
+                NotificationManager.shared.scheduleTaskNotification(for: task)
+            } else {
+                NotificationManager.shared.cancelTaskNotifications(for: task)
+            }
+            
+            dismiss()
+        } catch {
+            let nsError = error as NSError
+            print("Error updating task: \(nsError), \(nsError.userInfo)")
+        }
+    }
+    
+    private func createBackgroundGradient() -> LinearGradient {
+        // Extract colors to simplify the expression
+        let isDarkMode = colorScheme == .dark
+        let backgroundColor1 = isDarkMode ? Color(hex: "1A1A1A") : Color(hex: "F8F9FF")
+        let backgroundColor2 = isDarkMode ? Color(hex: "212121") : Color(hex: "FFFFFF")
+        
+        let gradient = Gradient(colors: [backgroundColor1, backgroundColor2])
+        return LinearGradient(
+            gradient: gradient,
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+}
+
+struct NewTaskView: View {
+    @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+    
+    @State private var title = ""
+    @State private var details = ""
+    @State private var dueDate = Date()
+    @State private var dueTime = Date()
+    @State private var priority: Int16 = 0
+    @State private var isShowingDatePicker = false
+    @State private var isShowingTimePicker = false
+    @State private var hasTimeReminder = false
+    @State private var selectedColor = "5E6BE8" // Default color
+    
+    // Computed properties for backgrounds (extracted from inline lets)
+    private var textFieldBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
+    }
+    
+    private var textEditorBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
+    }
+    
+    private var datePickerBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
+    }
+    
+    private var timePickerBackground: Color {
+        colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white
+    }
+    
+    // Color options for tasks
+    private let colorOptions = [
+        "5E6BE8", // Primary blue
+        "FF9D42", // Orange
+        "4CD964", // Green
+        "FF3B30", // Red
+        "AF52DE", // Purple
+        "FF2D55"  // Pink
+    ]
+    
+    var body: some View {
+        NavigationView {
+            ZStack {
+                // Background color
+                createBackgroundGradient()
+                    .ignoresSafeArea()
+                
+                // Content
+                ScrollView {
+                    VStack(spacing: 24) {
+                        // Task title input
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("TITLE")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            TextField("Task title", text: $title)
+                                .font(.system(size: 17))
+                                .padding()
+                                .background(textFieldBackground)
+                                .cornerRadius(12)
+                                .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                        }
+                        
+                        // Task details input
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("DETAILS")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            ZStack(alignment: .topLeading) {
+                                if details.isEmpty {
+                                    Text("Add task details (optional)")
+                                        .foregroundColor(Color.gray.opacity(0.7))
+                                        .font(.system(size: 17))
+                                        .padding(.top, 18)
+                                        .padding(.leading, 16)
+                                }
+                                
+                                TextEditor(text: $details)
+                                    .font(.system(size: 17))
+                                    .padding(4)
+                                    .frame(minHeight: 120)
+                                    .background(textEditorBackground)
+                                    .cornerRadius(12)
+                                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                            }
+                        }
+                        
+                        // Due date section
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Text("DUE DATE")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.secondary)
+                                
+                                Spacer()
+                                
+                                Toggle("", isOn: $isShowingDatePicker)
+                                    .labelsHidden()
+                                    .tint(Color(hex: selectedColor))
+                            }
+                            
+                            if isShowingDatePicker {
+                                HStack {
+                                    Image(systemName: "calendar")
+                                        .foregroundColor(Color(hex: selectedColor))
+                                    
+                                    DatePicker("Select date", selection: $dueDate, displayedComponents: [.date])
+                                        .labelsHidden()
+                                        .datePickerStyle(.compact)
+                                    
+                                    Spacer()
+                                    
+                                    Text(dueDate.formattedDate())
+                                        .font(.system(size: 15))
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding()
+                                .background(datePickerBackground)
+                                .cornerRadius(12)
+                                .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                            }
+                        }
+                        
+                        // Due time section
+                        if isShowingDatePicker {
+                            VStack(alignment: .leading, spacing: 12) {
+                                HStack {
+                                    Text("DUE TIME")
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(.secondary)
+                                    
+                                    Spacer()
+                                    
+                                    Toggle("", isOn: $hasTimeReminder)
+                                        .labelsHidden()
+                                        .tint(Color(hex: selectedColor))
+                                        .onChange(of: hasTimeReminder) { _, newValue in
+                                            isShowingTimePicker = newValue
                                         }
+                                }
+                                
+                                if isShowingTimePicker {
+                                    HStack {
+                                        Image(systemName: "clock")
+                                            .foregroundColor(Color(hex: selectedColor))
+                                        
+                                        DatePicker("Select time", selection: $dueTime, displayedComponents: [.hourAndMinute])
+                                            .labelsHidden()
+                                            .datePickerStyle(.compact)
+                                        
+                                        Spacer()
+                                        
+                                        Text(formattedTime(dueTime))
+                                            .font(.system(size: 15))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding()
+                                    .background(timePickerBackground)
+                                    .cornerRadius(12)
+                                    .shadow(color: Color.black.opacity(0.05), radius: 5, x: 0, y: 2)
+                                    
+                                    // Notification reminder info
+                                    HStack {
+                                        Image(systemName: "bell.fill")
+                                            .foregroundColor(Color(hex: selectedColor))
+                                            .font(.system(size: 14))
+                                        
+                                        Text("You'll receive a notification at this time")
+                                            .font(.system(size: 14))
+                                            .foregroundColor(.secondary)
+                                        
+                                        Spacer()
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, 4)
+                                }
+                            }
+                        }
+                        
+                        // Priority section
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("PRIORITY")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            HStack(spacing: 12) {
+                                priorityButton(level: 0, label: "Low")
+                                priorityButton(level: 1, label: "Medium")
+                                priorityButton(level: 2, label: "High")
+                            }
+                        }
+                        
+                        // Color selector
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("COLOR")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.secondary)
+                            
+                            HStack(spacing: 16) {
+                                ForEach(colorOptions, id: \.self) { color in
+                                    colorCircleButton(color: color, isSelected: selectedColor == color) {
+                                        selectedColor = color
+                                    }
                                 }
                             }
                             .padding(.horizontal)
@@ -949,41 +1278,59 @@ struct NewTaskView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .foregroundColor(Color(hex: selectedColor))
+                    Button("Cancel") { dismiss() }
+                        .foregroundColor(Color(hex: selectedColor))
                 }
                 
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Save") {
-                        saveTask()
-                    }
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundColor(title.isEmpty ? Color.gray : Color(hex: selectedColor))
-                    .disabled(title.isEmpty)
+                    Button("Save") { saveTask() }
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(Color(hex: selectedColor))
+                        .disabled(title.isEmpty)
                 }
             }
         }
     }
     
+    private func formattedTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
+    }
+    
     private func priorityButton(level: Int16, label: String) -> some View {
-        Button(action: {
+        // Extract background and text colors to simplify expressions
+        let isSelected = priority == level
+        let backgroundColor = isSelected ? 
+            Color(hex: selectedColor).opacity(0.15) : 
+            (colorScheme == .dark ? Color(hex: "2A2A2A") : Color(hex: "F5F5F5"))
+        
+        let textColor = isSelected ? 
+            Color(hex: selectedColor) : 
+            (colorScheme == .dark ? Color.gray : Color(hex: "8E8E93"))
+        
+        let fontWeight: Font.Weight = isSelected ? .semibold : .regular
+        
+        // Create the text view separately
+        let textView = Text(label)
+            .font(.system(size: 15, weight: fontWeight))
+            .padding(.vertical, 10)
+            .padding(.horizontal, 16)
+        
+        // Create the background separately
+        let background = RoundedRectangle(cornerRadius: 8)
+            .fill(backgroundColor)
+        
+        // Combine them in the button
+        return Button(action: {
             priority = level
         }) {
-            Text(label)
-                .font(.system(size: 15, weight: priority == level ? .semibold : .regular))
-                .foregroundColor(priority == level ? .white : (colorScheme == .dark ? .white : Color(hex: "2D3142")))
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity)
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(priority == level ? Color(hex: selectedColor) : 
-                              (colorScheme == .dark ? Color(hex: "2A2A2A") : Color.white.opacity(0.8)))
-                        .shadow(color: priority == level ? Color(hex: selectedColor).opacity(0.3) : Color.black.opacity(0.03), 
-                                radius: 5, x: 0, y: 2)
-                )
+            textView
+                .background(background)
+                .foregroundColor(textColor)
         }
+        .buttonStyle(PlainButtonStyle())
     }
     
     private func saveTask() {
@@ -991,18 +1338,76 @@ struct NewTaskView: View {
         newTask.id = UUID()
         newTask.title = title
         newTask.details = details
-        newTask.dueDate = isShowingDatePicker ? dueDate : nil
+        newTask.createdAt = Date()
         newTask.priority = priority
         newTask.completed = false
-        newTask.createdAt = Date()
+        
+        // Set due date if enabled
+        if isShowingDatePicker {
+            newTask.dueDate = dueDate
+            
+            // Set due time if enabled
+            if hasTimeReminder {
+                newTask.dueTime = dueTime
+                newTask.hasTimeReminder = true
+            } else {
+                newTask.hasTimeReminder = false
+                newTask.dueTime = nil
+            }
+        } else {
+            // Explicitly set to nil when no due date is selected
+            newTask.dueDate = nil
+            newTask.dueTime = nil
+            newTask.hasTimeReminder = false
+        }
         
         do {
             try viewContext.save()
+            
+            // Schedule notification if due date and time are set
+            if isShowingDatePicker && hasTimeReminder {
+                NotificationManager.shared.scheduleTaskNotification(for: newTask)
+            }
+            
             dismiss()
         } catch {
             let nsError = error as NSError
             print("Error saving task: \(nsError), \(nsError.userInfo)")
         }
+    }
+    
+    private func createBackgroundGradient() -> LinearGradient {
+        // Extract colors to simplify the expression
+        let isDarkMode = colorScheme == .dark
+        let backgroundColor1 = isDarkMode ? Color(hex: "1A1A1A") : Color(hex: "F8F9FF")
+        let backgroundColor2 = isDarkMode ? Color(hex: "212121") : Color(hex: "FFFFFF")
+        
+        let gradient = Gradient(colors: [backgroundColor1, backgroundColor2])
+        return LinearGradient(
+            gradient: gradient,
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+    
+    private func colorCircleButton(color: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
+        let circleColor = Color(hex: color)
+        let strokeWidth: CGFloat = isSelected ? 2 : 0
+        
+        return Circle()
+            .fill(circleColor)
+            .frame(width: 30, height: 30)
+            .overlay(
+                Circle()
+                    .stroke(Color.white, lineWidth: strokeWidth)
+                    .padding(2)
+            )
+            .overlay(
+                Circle()
+                    .stroke(circleColor.opacity(0.3), lineWidth: 1)
+            )
+            .shadow(color: circleColor.opacity(0.5), radius: 3, x: 0, y: 0)
+            .onTapGesture(perform: action)
     }
 }
 
@@ -1097,6 +1502,8 @@ struct PriorityPickerSheet: View {
                 
                 Text(title)
                     .foregroundColor(colorScheme == .dark ? .white : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 
                 Spacer()
                 
