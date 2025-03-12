@@ -392,6 +392,8 @@ struct TaskRow: View {
     @State private var isShowingDatePicker = false
     @State private var isShowingPriorityPicker = false
     @State private var editingDate = Date()
+    @State private var offset: CGFloat = 0
+    @State private var isSwiped = false
     
     // Color gradients for priority levels
     private var priorityGradient: LinearGradient {
@@ -424,8 +426,72 @@ struct TaskRow: View {
     }
     
     var body: some View {
-        taskRowContent
-            .onTapGesture {
+        ZStack {
+            // Delete button (revealed when swiped)
+            HStack {
+                Button(action: {
+                    deleteTask()
+                }) {
+                    Image(systemName: "trash")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 60, height: 60)
+                }
+                .frame(width: 60, height: 60)
+                .background(Color.red)
+                .cornerRadius(16)
+                
+                Spacer()
+            }
+            .padding(.leading, 4)
+            
+            // Task row content
+            taskRowContent
+                .offset(x: offset)
+                .gesture(
+                    DragGesture()
+                        .onChanged { gesture in
+                            // Only allow right swipe (positive values)
+                            if gesture.translation.width > 0 {
+                                // Limit the drag to 80 points
+                                self.offset = min(gesture.translation.width, 80)
+                            }
+                        }
+                        .onEnded { gesture in
+                            // If dragged more than 70 points, delete the task
+                            if gesture.translation.width > 70 {
+                                deleteTask()
+                                // Reset offset after deletion
+                                withAnimation(.spring()) {
+                                    self.offset = 0
+                                    self.isSwiped = false
+                                }
+                            }
+                            // If dragged between 40 and 70 points, snap to 60
+                            else if gesture.translation.width > 40 {
+                                withAnimation(.spring()) {
+                                    self.offset = 60
+                                    self.isSwiped = true
+                                }
+                            } else {
+                                // Otherwise snap back to 0
+                                withAnimation(.spring()) {
+                                    self.offset = 0
+                                    self.isSwiped = false
+                                }
+                            }
+                        }
+                )
+        }
+        .onTapGesture {
+            // If swiped open, close it
+            if isSwiped {
+                withAnimation(.spring()) {
+                    self.offset = 0
+                    self.isSwiped = false
+                }
+            } else {
+                // Otherwise handle the normal tap
                 withAnimation {
                     isPressed = true
                 }
@@ -438,21 +504,22 @@ struct TaskRow: View {
                     toggleCompletion()
                 }
             }
-            .sheet(isPresented: $isShowingEditSheet) {
-                EditTaskView(task: task)
+        }
+        .sheet(isPresented: $isShowingEditSheet) {
+            EditTaskView(task: task)
+        }
+        .sheet(isPresented: $isShowingDatePicker) {
+            DatePickerSheet(date: $editingDate, isPresented: $isShowingDatePicker) { newDate in
+                updateDueDate(newDate)
             }
-            .sheet(isPresented: $isShowingDatePicker) {
-                DatePickerSheet(date: $editingDate, isPresented: $isShowingDatePicker) { newDate in
-                    updateDueDate(newDate)
-                }
-                .presentationDetents([.height(420)])
+            .presentationDetents([.height(420)])
+        }
+        .sheet(isPresented: $isShowingPriorityPicker) {
+            PriorityPickerSheet(priority: task.priority, isPresented: $isShowingPriorityPicker) { newPriority in
+                updatePriority(newPriority)
             }
-            .sheet(isPresented: $isShowingPriorityPicker) {
-                PriorityPickerSheet(priority: task.priority, isPresented: $isShowingPriorityPicker) { newPriority in
-                    updatePriority(newPriority)
-                }
-                .presentationDetents([.height(220)])
-            }
+            .presentationDetents([.height(220)])
+        }
     }
     
     // MARK: - Component Views
@@ -622,6 +689,7 @@ struct TaskRow: View {
         .scaleEffect(isPressed ? 0.98 : 1.0)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPressed)
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: task.completed)
+        .background(colorScheme == .dark ? Color(hex: "1A1A1A").opacity(0.01) : Color.white.opacity(0.01))
     }
     
     // MARK: - Helper Functions
@@ -684,6 +752,21 @@ struct TaskRow: View {
         formatter.timeStyle = .short
         formatter.dateStyle = .none
         return formatter.string(from: date)
+    }
+    
+    private func deleteTask() {
+        withAnimation {
+            // Cancel any notifications for this task before deleting
+            NotificationManager.shared.cancelTaskNotifications(for: task)
+            
+            viewContext.delete(task)
+            do {
+                try viewContext.save()
+            } catch {
+                let nsError = error as NSError
+                print("Unresolved error \(nsError), \(nsError.userInfo)")
+            }
+        }
     }
 }
 
